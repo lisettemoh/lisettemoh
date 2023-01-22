@@ -1,7 +1,6 @@
 - 👋 Hi, I’m Lisette Mohammed from Whitby, Ontario
 - 👩‍💻 I am an enthusiastic self-taught Data Analyst and a lifelong learner.
 - 🌱 I’m currently learning SQL & Python
-- 💞️ I’m looking to collaborate on ...
 - 📫 How to reach me: lisette.mohammed@gmail.com
 
 <!---
