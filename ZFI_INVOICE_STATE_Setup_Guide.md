@@ -13,13 +13,131 @@
 
 ## Prerequisites
 
-- [ ] BAQ `ZFI-InvoiceByState` built and tested (see previous session notes)
+- [ ] BAQ `ZFI-InvoiceByState` built and tested — **see Part 0 below for full build instructions**
 - [ ] Confirm Kinetic invoice type codes that map to SAP types G2, S1, ZRE (needed for the
   BAQ calculated field `NetValue` sign reversal — see Note A at the bottom)
 - [ ] SSRS Report Server deployed and reachable
 - [ ] Your Kinetic user has **System Manager** or **Report Administrator** security access
 - [ ] Microsoft Report Builder or Visual Studio with SSRS extension installed (optional —
   only needed if you want to preview the .rdl before uploading)
+
+---
+
+## Part 0 — Build the BAQ
+
+> **⚠ Correction from earlier notes:** There is no `StateProvince` table in this Kinetic
+> environment. Do **not** add a `StateProvince` join. The state/province value comes
+> directly from the `Customer` table.
+
+### 0.1 Open BAQ Designer
+
+`System Setup → Business Activity Queries → Business Activity Query`
+
+Click **New**, set:
+
+| Field | Value |
+|-------|-------|
+| BAQ ID | `ZFI-InvoiceByState` |
+| Description | `Invoices by Province or State` |
+| Type | `Updatable BAQ` → No / **Standard BAQ** |
+| Company | Your company ID |
+
+Click **Save**, then open the BAQ for editing.
+
+---
+
+### 0.2 Add Tables
+
+Add **two** tables in the following order:
+
+| # | Table | Role |
+|---|-------|------|
+| 1 | `InvcHead` | Primary — invoice header |
+| 2 | `Customer` | Joined — customer name and bill-to state |
+
+#### Join: InvcHead → Customer
+
+| Setting | Value |
+|---------|-------|
+| Join Type | **Inner Join** |
+| Left table | `InvcHead` |
+| Right table | `Customer` |
+| Condition 1 | `InvcHead.Company = Customer.Company` |
+| Condition 2 | `InvcHead.CustNum = Customer.CustNum` |
+
+---
+
+### 0.3 Add Fields and Set Aliases
+
+On the **Fields** tab, add each field below and set the alias exactly as shown
+(the `.rdl` file references these aliases by name):
+
+| Table | Field | **Alias (required exact match)** | Notes |
+|-------|-------|----------------------------------|-------|
+| `Customer` | `BTState` | `StateDesc` | Bill-to state/province code (e.g. `ON`, `BC`) |
+| `Customer` | `CustID` | `CustID` | Customer code |
+| `Customer` | `Name` | `CustName` | Customer name |
+| `InvcHead` | `InvoiceType` | `InvoiceType` | Invoice type code |
+| `InvcHead` | `InvoiceNum` | `InvoiceNum` | Invoice number |
+| `InvcHead` | `InvoiceDate` | `InvoiceDate` | Invoice date |
+| Calculated | *(see 0.4)* | `NetValue` | Sign-corrected invoice amount |
+| `InvcHead` | `CurrencyCode` | `CurrencyCode` | Currency |
+
+> **Why `BTState` and alias `StateDesc`?**
+> `Customer.BTState` is the bill-to address state — the correct field for AR/Finance
+> invoice reporting. The alias `StateDesc` is kept to match the `.rdl` dataset field name.
+> The value will be the state **code** (e.g. `ON`), not a full description, because there
+> is no state name lookup table in this environment.
+
+---
+
+### 0.4 Calculated Field — NetValue
+
+In the **Fields** tab, add a **Calculated Field**:
+
+- **Alias:** `NetValue`
+- **Data Type:** `Decimal`
+- **Expression:**
+
+```sql
+CASE
+  WHEN InvcHead.InvoiceType IN ('CM', 'REI')   -- update codes after confirming — see Note A
+  THEN InvcHead.InvoiceAmt * -1
+  ELSE InvcHead.InvoiceAmt
+END
+```
+
+> Confirm the exact `InvoiceType` codes for credit memos and reversals in your system
+> before finalising this expression. See **Note A** at the bottom of this guide.
+
+---
+
+### 0.5 Add BAQ Parameters
+
+On the **Criteria** tab, add three parameters:
+
+| Parameter | Operator | Field | Data Type |
+|-----------|----------|-------|-----------|
+| `pState` | `=` | `Customer.BTState` | String |
+| `pDateFrom` | `>=` | `InvcHead.InvoiceDate` | DateTime |
+| `pDateTo` | `<=` | `InvcHead.InvoiceDate` | DateTime |
+
+For each:
+1. Click **Add Criteria**
+2. Select the table/field
+3. Set the operator
+4. Check **Parameter** and enter the parameter name exactly as shown above
+
+---
+
+### 0.6 Save and Test the BAQ
+
+1. Click **Save**
+2. Click **Test** — enter a valid bill-to state code (e.g. `ON`) and a narrow date range
+3. Confirm rows return with correct data
+4. Confirm a credit memo row exists and has a negative `NetValue`
+
+---
 
 ---
 
@@ -30,7 +148,7 @@ Open BAQ `ZFI-InvoiceByState`, go to the **Fields** tab, and verify each alias m
 
 | BAQ Table / Source | Field | **Required Alias** |
 |-------------------|-------|--------------------|
-| `StateProvince.Description` | State name | `StateDesc` |
+| `Customer.BTState` | Bill-to state/province code | `StateDesc` |
 | `Customer.CustID` | Customer code | `CustID` |
 | `Customer.Name` | Customer name | `CustName` |
 | `InvcHead.InvoiceType` | Invoice type code | `InvoiceType` |
@@ -39,6 +157,11 @@ Open BAQ `ZFI-InvoiceByState`, go to the **Fields** tab, and verify each alias m
 | Calculated field (sign-corrected amount) | Net value | `NetValue` |
 | `InvcHead.CurrencyCode` | Currency | `CurrencyCode` |
 
+> **Note:** `StateDesc` contains the state **code** (e.g. `ON`, `BC`, `AB`), not a
+> full description. There is no `StateProvince` table in this environment — do not add one.
+> If the Finance team needs full province/state names in the report, a manual lookup list
+> can be added as a static dataset inside the `.rdl` at a later stage.
+>
 > If any alias differs, either rename it in the BAQ or do a find-and-replace in the `.rdl`
 > file before uploading.
 
@@ -314,14 +437,25 @@ This is optional — Finance can also enter the dates manually each run.
 
 ---
 
-## Note C — Country Scope
+## Note C — Country Scope and State Field Choice
 
-The ABAP report was hardcoded to country `CA` (Canada) for the state description lookup.
-The BAQ join to `StateProvince` will work for all countries unless you add an explicit
-filter. If your Kinetic data includes customers in multiple countries and state codes
-overlap (e.g., `ON` exists in both Canada and Nigeria), add this filter to the BAQ:
+The original ABAP report was hardcoded to country `CA` (Canada). In this Kinetic BAQ
+there is no `StateProvince` table join, so there is no automatic country scope restriction.
 
-`Customer.CountryNum = [Canada's CountryNum in your Kinetic data]`
+**This BAQ uses `Customer.BTState`** (the bill-to address state). The `Customer` table
+also contains `Customer.State` (the ship-to / main address state). Available fields:
 
-Check the `Country` table in BAQ Designer or ask your Kinetic admin for the `CountryNum`
-value for Canada.
+| Field | Meaning | Used in this BAQ? |
+|-------|---------|-------------------|
+| `Customer.BTState` | Bill-to (invoice) address state | ✅ Yes |
+| `Customer.State` | Ship-to / main address state | No |
+
+If your Kinetic data includes customers in multiple countries and state codes overlap
+(e.g. `ON` exists in both Canada and Nigeria), add this additional criteria to the BAQ
+to restrict to Canadian customers only:
+
+`Customer.Country = 'CA'`  *(or whichever value your Country field holds for Canada —
+check the `Country` table in BAQ Designer or confirm with your Kinetic admin)*
+
+> The `Country` table in this environment also exposes `State` and `BTState` fields.
+> These are **not** used in this BAQ — the state value is drawn directly from `Customer.BTState`.
